@@ -1,11 +1,57 @@
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "dispatcher.h"
 #include "shell_builtins.h"
 #include "parser.h"
+
+/**
+ * run_child() - exec a single command in the current (child) process
+ *
+ * @cmd: The command to execute.
+ *
+ * This function does not return: it either replaces the current
+ * process image via execvp(), or it prints an error and exits the
+ * child process directly, so that a failed exec doesn't leave two
+ * shells running.
+ */
+static void run_child(struct command *cmd)
+{
+	execvp(cmd->argv[0], cmd->argv);
+
+	/* execvp() only returns on failure. */
+	fprintf(stderr, "%s: %s\n", cmd->argv[0], strerror(errno));
+	_exit(127);
+}
+
+/**
+ * wait_for_child() - wait for a single child process to finish
+ *
+ * @pid: The process ID of the child to wait for.
+ *
+ * Return: the exit status of the child, following the same
+ * convention as a POSIX shell (128 + signal number if the child was
+ * killed by a signal).
+ */
+static int wait_for_child(pid_t pid)
+{
+	int status;
+
+	if (waitpid(pid, &status, 0) < 0) {
+		fprintf(stderr, "waitpid: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (WIFSIGNALED(status))
+		return 128 + WTERMSIG(status);
+
+	return WEXITSTATUS(status);
+}
 
 /**
  * dispatch_external_command() - run a pipeline of commands
@@ -26,32 +72,22 @@
  */
 static int dispatch_external_command(struct command *pipeline)
 {
+	pid_t pid;
+
 	/*
-	 * Note: this is where you'll start implementing the project.
-	 *
-	 * It's the only function with a "TODO".  However, if you try
-	 * and squeeze your entire external command logic into a
-	 * single routine with no helper functions, you'll quickly
-	 * find your code becomes sloppy and unmaintainable.
-	 *
-	 * It's up to *you* to structure your software cleanly.  Write
-	 * plenty of helper functions, and even start making yourself
-	 * new files if you need.
-	 *
-	 * For D1: you only need to support running a single command
-	 * (not a chain of commands in a pipeline), with no input or
-	 * output files (output to stdout only).  In other words, you
-	 * may live with the assumption that the "input_file" field in
-	 * the pipeline struct you are given is NULL, and that
-	 * "output_type" will always be COMMAND_OUTPUT_STDOUT.
-	 *
-	 * For D2: you'll extend this function to support input and
-	 * output files, as well as pipeline functionality.
-	 *
-	 * Good luck!
+	 * For D1: only a single command is supported, with no input
+	 * or output files (output to stdout only).
 	 */
-	fprintf(stderr, "TODO: handle external commands\n");
-	return -1;
+	pid = fork();
+	if (pid < 0) {
+		fprintf(stderr, "fork: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (pid == 0)
+		run_child(pipeline);
+
+	return wait_for_child(pid);
 }
 
 /**
